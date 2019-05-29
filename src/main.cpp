@@ -1,8 +1,8 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiManager.h>  
-#include <ESP8266WebServer.h>
-#include <arduinojson.h>
+#include <WebServer.h>
+#include <ArduinoJson.h>
 #include "ESP32FtpServer.h"
 //#include <SPI.h>
 #include <MFRC522.h>
@@ -14,21 +14,25 @@
 #include <JC_Button.h>          // https://github.com/JChristensen/JC_Button
 //#include "Mp3Player/src/mp3player.h"
 #include "stringarray.h"
+#include <FastLED.h>
 
-#define buttonVolPlus  button5
-#define buttonVolMinus button4
-#define buttonStart    button1
-#define buttonStop     button2
-#define buttonRestart  button3
+#define buttonPlay      button1
+#define buttonSkipPlus  button2
+#define buttonSkipMinus button3
+#define buttonVolMinus  button4
+#define buttonVolPlus   button5
 
+unsigned long displayTimer; //courtesy time to display info
+TaskHandle_t Task1;
+TaskHandle_t Task2;
 
 //char testString[256];
 const unsigned long WIFI_TIMEOUT = 5000; //ms
 
 bool volumeEnabled = true;
 
-const uint8_t START_VOLUME = 6;
-const uint8_t MAX_VOLUME = 20;
+const uint8_t START_VOLUME = 14;
+const uint8_t MAX_VOLUME = 21; //org = 20
 const uint8_t MIN_VOLUME = 4;
 uint8_t   volume = START_VOLUME;
 
@@ -47,7 +51,7 @@ unsigned long       standbyTimer=0;
 const unsigned long gotoStandbyAfter= 5 *60 *1000; //ms
 
 
-const char PROGMEM rootFileName[]         = "/root.html";
+const char PROGMEM rootFileName[]        = "/root.html";
 const char PROGMEM mainPageFileName[]    = "/mainpage.html";
 
 const char PROGMEM assignPageFileName[]  = "/assignpage.html";
@@ -87,18 +91,18 @@ const char PROGMEM OPTION [] ="<option  value=\"" TRACK_IDX "\" " SELECTED ">" T
 const char PROGMEM OK_REDIRECT_MAINPAGE [] = "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"1; URL=/\"><title>OK</title></head><body>OK :-) (mainpage in 3 sec.)</body></html>";
 
 
-MFRC522   mfrc522(MFRC522_CS, MFRC522_RST);  // Create MFRC522 instance
+MFRC522   mfrc522(MFRC522_CS, 0/*MFRC522_RST*/);  // Create MFRC522 instance
 
 FtpServer ftpSrv;   
 WebServer server(80); 
 VS1053 player(VS1053_CS, VS1053_DCS, VS1053_DREQ);
 
 
-Button button1(BUTTON_1, 25, INPUT_PULLDOWN, false); 
-Button button2(BUTTON_2, 25, INPUT_PULLDOWN, false); 
+Button button1(BUTTON_1, 25, INPUT, false); 
+Button button2(BUTTON_2, 25, INPUT_PULLUP, true); 
 Button button3(BUTTON_3, 25, INPUT_PULLDOWN, false); 
-Button button4(BUTTON_4, 25, INPUT_PULLDOWN, false); 
-Button button5(BUTTON_5, 25, INPUT_PULLDOWN, false); 
+Button button4(BUTTON_4, 25, INPUT, false); 
+Button button5(BUTTON_5, 25, INPUT, false); 
 
 /*
 #define uS_TO_S_FACTOR 1000000  // Conversion factor for micro seconds to seconds 
@@ -107,6 +111,20 @@ Button button5(BUTTON_5, 25, INPUT_PULLDOWN, false);
 
 #define BUTTON_PIN_BITMASK 0x200000000 // 2^33 in hex
 RTC_DATA_ATTR int bootCount = 0;
+
+
+//start fastled
+#define DATA_PIN    LED_Ring
+//#define CLK_PIN   4
+#define LED_TYPE    WS2812
+#define COLOR_ORDER GRB
+#define NUM_LEDS    16
+CRGB leds[NUM_LEDS];
+#define BRIGHTNESS          128
+#define FRAMES_PER_SECOND 120
+//end fastled
+//int volumeLED, playLED = 0;  //global variable for palystate and volume state
+const int LED_COUNT = 16;
 
 /*
 Method to print the reason by which ESP32
@@ -153,10 +171,23 @@ void flashLed(int pin, unsigned long time = BLINK_TIME)
     ||(pin == LED_4)
     ||(pin == LED_5))
   {
-    led(pin,false);
-    delay(time);
+    //led(pin,false);
     led(pin,true);
+    delay(time);
+    //led(pin,true);
+    led(pin,false);
   }
+}
+
+void flashRing(struct CRGB ringColor, unsigned long time = BLINK_TIME)
+{
+  FastLED.clear(true);
+  for (int i = 0; i < LED_COUNT; i=i+(round(LED_COUNT/4)))
+  {
+    leds[i] = ringColor;
+  }
+  FastLED.show();
+  delay(time);
 }
 
 void getFileList(fs::FS &fs, StringArray* array, const char * dirname, uint8_t levels, bool onlyDirAndM3U =true)
@@ -484,19 +515,37 @@ void notFound()
   server.send(404, "text/plain", message);
 
 }
+/*
+void gradientRing(int R, int G, int B)
+{
+  for (int i = 0; i != LED_COUNT; i++)
+  {
+    if (i <= voler) leds[i].setRGB();
+    else leds[i] = CRBG:BLACK; //turn other LEDs off
+  }
 
+}*/
 
-int setVolume(int newVolume)
+void setVolume(int newVolume)
 {
   player.setVolume(newVolume);
   volume = newVolume;
   ESP_LOGV(TAG, "Changing volume to %d", volume);
-
+    float volers = (float) (( (float) volume / (float) MAX_VOLUME) * (float)LED_COUNT);
+    int volumeLEDS = (int) volers;
+    int volumeLEDS = round( (volume / MAX_VOLUME) * LED_COUNT); //test
+    for (int j = 0; j != LED_COUNT; j++)
+      {
+      if (j <= volumeLEDS) leds[j].setRGB(j*(128/NUM_LEDS), (LED_COUNT*(128/NUM_LEDS))-(j*(128/NUM_LEDS)), 0); //dim green
+      else leds[j]= CRGB::Black; //off*/
+    }
+    FastLED.show();
+    delay(10);
+    displayTimer = millis();  //make sure it stays visible
 }
 
 int changeVolume(int delta)
 {
-
   volume += delta;
   volume = volume > MAX_VOLUME ? MAX_VOLUME : volume;
   volume = volume < MIN_VOLUME ? MIN_VOLUME : volume;
@@ -510,11 +559,12 @@ void sendMainPage()
   if (file)
   {
       server.streamFile(file,"text/html");
+      delay(1);
       file.close();
+      delay(1);
   }
 
 }
-
 
 void serverStart()
 {
@@ -529,11 +579,13 @@ void serverStart()
    server.on("/vol-", HTTP_GET, [](){
       Serial.println("vol-");
       changeVolume(-5);
+      delay(5);
       sendMainPage();
     });
 
     server.on("/vol+", HTTP_GET, [](){
       Serial.println("vol+");
+      delay(5);
       changeVolume(+2);
       sendMainPage();
     });
@@ -580,7 +632,26 @@ void serverStart()
       sendMainPage();
     });
 
+    server.on("/nexttrack", HTTP_GET, [](){
+      Serial.println("next track");
+      if (player.isPlaying())
+      { 
+        player.nextTrack();   //skip track
+        player.isPaused = 0;
+      }
+      sendMainPage();
+    });
 
+    server.on("/previoustrack", HTTP_GET, [](){
+      Serial.println("previous track");
+      if (player.isPlaying())
+      {
+        Serial.println(player.findPreviousPlaylistEntry());
+        //player.connecttoSD(lastTrack,false); // same track, start from the beginnig (of playlist)
+        player.connecttoSD(player.findPreviousPlaylistEntry(),false);
+      }
+      sendMainPage();
+    });    
 
     server.on("/allcards", HTTP_GET, [](){
         ESP_LOGV(TAG, "allcards, free heap: %lu", ESP.getFreeHeap());
@@ -789,7 +860,7 @@ void serverStart()
 
 void wifiStart()
   {
-    if (digitalRead(BUTTON_START))  
+    if (digitalRead(BUTTON_PLAY))  //enable WIFI if play button pressed during startup
     {
       WiFiManager WifiManager;
       String hostName = String(F("ESPFTP")) + String((unsigned long)ESP.getEfuseMac()); 
@@ -805,6 +876,7 @@ void wifiStart()
       WiFi.setHostname(hostName.c_str());
       Serial.print("MyHostName:");
       Serial.println(WiFi.getHostname());
+      flashRing(CRGB::Blue,500); //signal active WIFI
     }
     else
     {
@@ -814,7 +886,7 @@ void wifiStart()
       do
       {
         delay(150);
-        flashLed(LED_2);
+        //flashLed(LED_2);
         status = WiFi.status();
       } 
       while ((status != WL_CONNECTED && status != WL_CONNECT_FAILED)
@@ -842,55 +914,132 @@ void wifiStart()
     button5.read();
 
     if (buttonVolMinus.pressedFor(100))
-    {
+    { 
       resetStandbyTimer();
+      Serial.println("vol- pressed");
       if (player.isPlaying())
       {
         changeVolume(-1);
-        flashLed(LED_VOL_MINUS);
+        flashLed(LED_VOL_MINUS,100);
       }
     }
 
     if (buttonVolPlus.pressedFor(100))
     {
       resetStandbyTimer();
+      Serial.println("vol+ pressed");
       if (player.isPlaying())
       {
         if (volumeEnabled)
         {
           changeVolume(+1);
         }
-        flashLed(LED_VOL_PLUS);
+        flashLed(LED_VOL_PLUS,100);
       }
     }
 
-    if (buttonStop.pressedFor(100))
+    /*if (buttonStop.pressedFor(100))
     {
+      Serial.println("stop pressed");
       resetStandbyTimer();
       flashLed(LED_STOP);
       player.stop_mp3client();
+    }*/
+    if (buttonSkipPlus.pressedFor(100))
+    {
+      Serial.println("Skip plus short pressed.");
+      Serial.print(player.getFileSize());
+      Serial.print(" ");
+      Serial.println(player.getFilePos() + (24*4096));
+      if (player.isPlaying() && (player.getFileSize() - 4096) > (player.getFilePos() + (24*4096))) //palying and able to skip
+      {    
+        flashLed(LED_SKIP_PLUS);
+        uint8_t tempVolume = player.getVolume();
+        player.setVolume(0);  //mute volume
+          player.setFilePos(player.getFilePos() + (24*4096)); //seek
+          unsigned long tTemp = millis();
+          while (millis() - tTemp < 180)
+          {
+            player.loop();  //waiting 
+          }
+          player.setVolume(tempVolume); //restore volume
+      }
     }
 
-    if (buttonStart.pressedFor(100))
+    if (buttonSkipPlus.pressedFor(3000))
     {
       resetStandbyTimer();
-      flashLed(LED_START);
+      Serial.println("Next track pressed.");
+      if (player.isPlaying())
+      { 
+        flashLed(LED_SKIP_PLUS);
+        player.nextTrack();   //skip track
+        player.isPaused = 0;
+        delay(300);
+      }
+    }
+
+    if (buttonPlay.pressedFor(100))
+    {
+      resetStandbyTimer();
+      Serial.println("Play pressed.");
+      //flashLed(LED_PLAY);
       if (!player.isPlaying())
       {
-        player.connecttoSD(lastTrack,true); // same track, resume
+        if (player.isPaused) player.isPaused = 0;      //unpause
+        else player.connecttoSD(lastTrack,true); // same track, resume
       }
-      else
+      else  //play is playing
       { 
-        if (buttonStart.timeSinceLastChange()<200)
+        Serial.println("...toogle pause");
+        delay(300);
+        player.isPaused = !player.isPaused; //toggle pause
+      }
+      delay(200);
+    }
+
+    if (buttonSkipMinus.pressedFor(100))
+    {
+      Serial.println("Skip minus short pressed.");
+      if (player.isPlaying() && (player.getFilePos() - (24*4096)) > (18*4096)) //palying and able to skip backwards (mind the header)
+      {    
+        Serial.println(player.getFilePos() - (24*4096));
+        Serial.println(player.getFilePos());
+        flashLed(LED_SKIP_MINUS);
+        uint8_t tempVolume = player.getVolume();
+        player.setVolume(0);  //mute volume
+        if (player.getFilePos() - (24*4096) > 0) player.setFilePos(player.getFilePos() - (24*4096)); //seek
+        unsigned long tTemp = millis();
+        while (millis() - tTemp < 180)  //loop for 180ms
         {
-          player.nextTrack();
+          player.loop();  //waiting 
         }
+        player.setVolume(tempVolume); //restore volume
+      }
+      else if ((player.getFilePos() - (24*4096)) < (18*4096))
+      {
+        player.connecttoSD(lastTrack,true);
+        Serial.println("Restart track");
       }
     }
 
-    if (buttonRestart.pressedFor(100))
+    if (buttonSkipMinus.pressedFor(2000))
     {
       resetStandbyTimer();
+      Serial.println("Previous track pressed.");
+      if (player.isPlaying())
+      {
+        flashLed(LED_SKIP_MINUS);
+        Serial.println(player.findPreviousPlaylistEntry());
+        //player.connecttoSD(lastTrack,false); // same track, start from the beginnig (of playlist)
+        player.connecttoSD(player.findPreviousPlaylistEntry(),false);
+      }
+    }
+
+    /*if (buttonRestart.pressedFor(100))
+    {
+      resetStandbyTimer();
+      Serial.println("restart pressed");
       if (!player.isPlaying())
       {
         if (lastTrack.length())
@@ -899,18 +1048,18 @@ void wifiStart()
           player.connecttoSD(lastTrack,false); // same track, start from the beginnig
         }
       }
-    }
+    }*/
 
-    if (button4.pressedFor(3000))
+    /*if (button4.pressedFor(3000))
     {
       standBy();
       Serial.println("This will never be printed");
-    }
+    }*/
 
-    if (button3.pressedFor(3000))
+    /*if (button3.pressedFor(3000))
     {
       ESP.restart();
-    }
+    }*/
  
   }
 /*
@@ -941,14 +1090,36 @@ void wifiStart()
   }
   */
 
-  
+ void coreFTP(void * parameter) {  //loop second core
+    while (true) {
+      delay(1);
+  if (WiFi.isConnected())
+  {
+    unsigned long ms =millis();
+    bool isBusy=false;
+    do 
+    {
+      //Serial.println("prepare handle ftp");
+      isBusy = ftpSrv.handleFTP();    
+      if (isBusy)
+      {
+        //standbyTimer = millis();
+      }
+    }
+    while (isBusy && millis()<ms+10);
+    //Serial.println("prepare handle client");
+    //server.handleClient();
+  }
+  //Serial.println("prepare handle buttons");
+  //handleButtons();
+      }
+} 
 
 
 
 
 void setup(void){
   Serial.begin(115200);
-
   pinMode(VS1053_ENABLE, OUTPUT);
   digitalWrite(VS1053_ENABLE, false);
 
@@ -958,29 +1129,24 @@ void setup(void){
   pinMode(LED_4,OUTPUT);
   pinMode(LED_5,OUTPUT);
 
-  led(LED_1,false);
-  led(LED_2,false);
-  led(LED_3,false);
-  led(LED_4,false);
-  led(LED_5,false);
+  pinMode(LED_Ring,OUTPUT);
 
-  // start "progressbar"  
   led(LED_1,true);
+  led(LED_2,true);
+  led(LED_3,true);
+  led(LED_4,true);
+  led(LED_5,true);
 
-/*
-  pinMode(BUTTON_1, INPUT_PULLDOWN);
-  pinMode(BUTTON_2, INPUT_PULLDOWN);
-  pinMode(BUTTON_3, INPUT_PULLDOWN);
-  pinMode(BUTTON_4, INPUT_PULLDOWN);
-  pinMode(BUTTON_5, INPUT_PULLDOWN);
-*/
+  FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+  // set master brightness control
+  FastLED.setBrightness(BRIGHTNESS);
+
 
   button1.begin();
   button2.begin();
   button3.begin();
   button4.begin();
   button5.begin();
-
 
   wifiStart();
 
@@ -993,7 +1159,7 @@ void setup(void){
   }
   else
   {
-  led(LED_2,true);
+  //led(LED_2,true);
   Serial.println("");
   Serial.print("Connected to ");
   Serial.println(WiFi.SSID().c_str());
@@ -1001,15 +1167,15 @@ void setup(void){
   Serial.println(WiFi.localIP());
   }
   
-
-
   ++bootCount;
   Serial.println("Boot number: " + String(bootCount));
   //Print the wakeup reason for ESP32
   print_wakeup_reason();
 
   SPI.begin();			// Init SPI bus
+  mfrc522.PCD_SetAntennaGain(0x07); //set RFID Antenna Gain to 48db
 	mfrc522.PCD_Init();		// Init MFRC522
+  mfrc522.PCD_SetAntennaGain(0x07); //set RFID Antenna Gain to 48db again
 	mfrc522.PCD_DumpVersionToSerial();	// Show details of PCD - MFRC522 Card Reader details
 
   Serial.print("MFRC522 Selftest:");
@@ -1026,7 +1192,7 @@ void setup(void){
 
   /////FTP Setup, ensure SD is started before ftp;  /////////
   if (SD.begin(SDCARD_CS)) {
-      led(LED_4,true);
+      //led(LED_4,true);
       Serial.println("SD opened!");
       ftpSrv.begin("esp32","esp32");    //username, password for ftp.  set ports in ESP32FtpServer.h  (default 21, 50009 for PASV)
   }    
@@ -1045,7 +1211,18 @@ void setup(void){
   serverStart();
   player.setVolume(volume);    
   Serial.println(F("Setup Complete"));
-  led(LED_5,true);
+  
+  xTaskCreatePinnedToCore( //task for second core
+    coreFTP,
+    "Handle FTP",
+    20000,
+    NULL,
+    1,
+    &Task1,
+    0 //core 0 second core
+  ); 
+
+  player.connecttoSD("/001_Los_gehts.mp3",false); //playinitial song
 }
 
 unsigned long lastCardCheck= 0;
@@ -1055,29 +1232,55 @@ const unsigned long cardCheckIntervall = 1000;
 
 void loop(void)
 {
-
   if (WiFi.isConnected())
   {
     unsigned long ms =millis();
     bool isBusy=false;
-    do 
+    /*todo 
     {
       isBusy = ftpSrv.handleFTP();    
       if (isBusy)
       {
         //standbyTimer = millis();
       }
-    }
+    }*/
     while (isBusy && millis()<ms+10);
     server.handleClient();
   }
 
   handleButtons();
-  player.loop();
 
+  player.loop();
   if (player.isPlaying())
   {
-    standbyTimer = millis();
+    if (player.isPaused)
+    {
+      flashLed(LED_1,300);  //blink paused LED while player is paused
+    }
+    else
+    {
+      standbyTimer = millis();
+      if (standbyTimer - displayTimer > 2000) //wait for other info to expire
+      {
+        float led_switch = (float) (LED_COUNT * ((float)player.getFilePos()/(float)player.getFileSize()));
+        int progressLEDS = (int) led_switch;
+        int progressLEDS = roundf(LED_COUNT * (player.getFilePos()/player.getFileSize())); //test
+        for (int i = 0; i != LED_COUNT; i++)
+        {
+          if (i <= progressLEDS) leds[i].setRGB(5+(i*(48/NUM_LEDS)), 0, 5+(i*(48/NUM_LEDS))); //dim purbple
+          else leds [i] = CRGB::Black; //off        
+        }
+        FastLED.show(); 
+      }
+    }
+  }
+  else if(millis() - displayTimer > 2000)
+  {
+    displayTimer = millis();
+    FastLED.clear(true); //clear ring when stopped
+    FastLED.show();
+    delay(1000);
+    flashRing(CRGB::White); //pulse ring white while waiting for Card
   }
 
   if (millis() > lastCardCheck + cardCheckIntervall)
@@ -1092,7 +1295,8 @@ void loop(void)
         lastCardId = uidString;
         if (!cardData.cardExists(uidString))
         {
-          flashLed(LED_RED);
+          flashRing(CRGB::Red); //Signal card known but not assigned
+          displayTimer = millis();
           cardData.addCard(uidString,"");
           Serial.print("Added new card: ");
           Serial.println(uidString);
@@ -1109,14 +1313,18 @@ void loop(void)
             if(!(player.isPlaying() && card.track.equalsIgnoreCase(lastTrack))) // not already playing that
             {
               const String& track = card.track;
-
+                //enable Play controls
+                led(LED_5,false);
+                led(LED_4,false);
+                led(LED_3,false);
+                led(LED_2,false);
+                led(LED_1,false);
               Serial.print(" Start playing ");
               Serial.println(track.c_str());
               if (track.startsWith("http"))
               {
                   ESP_LOGV(TAG, "Play Stream");
                   flashLed(LED_GREEN);
-
                   player.connecttohost(track);
               } 
               else if (track.charAt(0) == '/') 
@@ -1152,12 +1360,13 @@ void loop(void)
             }
             else
             {
-              flashLed(LED_GREEN);
+              flashLed(LED_GREEN); // is playing?
             }
           }
           else
           {
-            flashLed(LED_YELLOW);
+            flashRing(CRGB::Yellow);
+            displayTimer = millis()+250;
           }
         }
       }
@@ -1174,6 +1383,5 @@ void loop(void)
     }
     ESP_LOGV(TAG, "Standby in %lu", (standbyTimer+gotoStandbyAfter - millis()) /1000);
   }
-
 
 }

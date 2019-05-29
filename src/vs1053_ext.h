@@ -164,6 +164,12 @@ class VS1053
     void     setTone(uint8_t* rtone);                   // Set the player baas/treble, 4 nibbles for treble gain/freq and bass gain/freq
     uint8_t  getVolume();                               // Get the current volume setting, higher is louder.
     bool     isPlaying();
+    //start Bert
+    uint32_t getFileSize();
+    uint32_t getFilePos();
+    bool setFilePos(uint32_t pos);
+    bool isPaused;
+    //end Bert
     void     nextTrack();
     void     printDetails();                            // Print configuration details to serial output.
     bool     printVersion();                            // Print ID and version of vs1053 chip
@@ -173,6 +179,7 @@ class VS1053
     bool     connecttohost(String host);
     bool	   connecttoSD(String originalSdFile, bool resume = false);
     String   findNextPlaylistEntry( bool restart = false );
+    String   findPreviousPlaylistEntry( bool restart = false );
     bool     connecttospeech(String speech, String lang);
     inline uint8_t getDatamode(){
        	return m_datamode;

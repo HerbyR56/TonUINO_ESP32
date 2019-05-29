@@ -120,6 +120,7 @@ uint16_t VS1053::wram_read(uint16_t address){
 //---------------------------------------------------------------------------------------
 void VS1053::begin()
 {
+    isPaused = 0;                                      //init as unpaused
     pinMode(dreq_pin, INPUT);                          // DREQ is an input
     pinMode(cs_pin, OUTPUT);                           // The SCI and SDI signals
     pinMode(dcs_pin, OUTPUT);
@@ -754,12 +755,37 @@ uint16_t VS1053::ringused()
     return (m_rcount);                                      // Free space available
 }
 //---------------------------------------------------------------------------------------
-
 bool VS1053::isPlaying()
 {
   return bool(mp3file);
 }
+//---------------------------------------------------------------------------------------------------------------------
+//modified start
 
+/*bool VS1053::isPaused()
+{
+    return bool isPaused;
+}*/
+uint32_t VS1053::getFileSize(){
+    if (!mp3file) return 0;
+    return mp3file.size();
+}
+//---------------------------------------------------------------------------------------------------------------------
+uint32_t VS1053::getFilePos(){
+    if (!mp3file) return 0;
+    return mp3file.position();
+}
+//---------------------------------------------------------------------------------------------------------------------
+bool VS1053::setFilePos(uint32_t pos){
+    if (!mp3file) return false;
+    //reset playback
+    write_register( 0x00, 0x4000 | 0x0800);
+    //resync
+    write_register(SCI_WRAMADDR, 0x1e29);
+    write_register(SCI_WRAM, 0);
+    return mp3file.seek(pos);
+}
+//modified end
 void VS1053::nextTrack()
 {
   if (m_f_localfile && mp3file)
@@ -787,7 +813,7 @@ void VS1053::loop()
     {
         av=mp3file.available();                             // Bytes left in file
         if(av < maxchunk) maxchunk=av;                      // Reduce byte count for this mp3loop()
-        if(maxchunk)                                        // Anything to read?
+        if(maxchunk && !isPaused)                                        // Anything to read?   and is not paused
         {
             m_btp=mp3file.read(m_ringbuf, maxchunk);        // Read a block of data
             sdi_send_buffer(m_ringbuf,m_btp);
@@ -1429,6 +1455,65 @@ String VS1053::findNextPlaylistEntry( bool restart )
     return actualEntry;
 }
 
+
+String VS1053::findPreviousPlaylistEntry( bool restart )
+{
+    fs::FS  &fs=SD;
+    File     myPlaylistFile;
+    String   actualEntry = "";
+
+    ESP_LOGD(TAG, "Analysing playlist %s", m_playlist.c_str());
+
+    myPlaylistFile = fs.open(m_playlist);
+
+    if (myPlaylistFile)
+    {
+        uint32_t actualEntryNumber = 0;
+
+        ESP_LOGD(TAG, "looking for line %u", m_playlist_num);
+
+        //read lines untill the "counter" matches the line
+        while (actualEntryNumber <= (m_playlist_num-1))
+        {
+            //read the next line
+            actualEntry = myPlaylistFile.readStringUntil('\r');
+
+            //remove whitespaces
+            actualEntry.trim();
+
+            //
+            actualEntryNumber++;
+
+            //check if we have reached the end of the list without finding our number
+            if ((actualEntry.length() == 0) && (myPlaylistFile.available() == false))
+            {
+                /*
+                ESP_LOGV(TAG, "Line %u does not exist, using line 1", m_playlist_num);
+
+                //rewind the file
+                myPlaylistFile.seek(0);
+                actualEntryNumber   = 0;
+                m_playlist_num      = 0;
+                actualEntry         = "";
+                */
+                m_playlist_num      = 0;
+                if (restart == false)
+                {
+                    break;
+                }
+                ESP_LOGV(TAG, "End of playlist");
+            }
+            else
+            {
+                ESP_LOGV(TAG, "Read playlist entry %u: \"%s\"", actualEntryNumber, actualEntry.c_str());
+            }
+        };
+
+        myPlaylistFile.close();
+    }
+
+    return actualEntry;
+}
 
 //---------------------------------------------------------------------------------------
 bool VS1053::openMp3File(String sdfile, uint32_t position) 
