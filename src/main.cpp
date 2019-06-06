@@ -23,6 +23,7 @@
 #define buttonVolPlus   button5
 
 unsigned long displayTimer; //courtesy time to display info
+unsigned long displayTimerLed = 0; //courtesy time to display info
 TaskHandle_t Task1;
 TaskHandle_t Task2;
 
@@ -104,6 +105,14 @@ Button button3(BUTTON_3, 25, INPUT_PULLDOWN, false);
 Button button4(BUTTON_4, 25, INPUT, false); 
 Button button5(BUTTON_5, 25, INPUT, false); 
 
+#define LONG_PRESS  500
+
+bool ignoreButtonPlay = false;
+bool ignoreButtonVolumePlus = false;
+bool ignoreButtonVolumeMinus = false;
+bool ignoreButtonSkipPlus = false;
+bool ignoreButtonSkipMinus = false;
+
 /*
 #define uS_TO_S_FACTOR 1000000  // Conversion factor for micro seconds to seconds 
 #define TIME_TO_SLEEP  10       // Time ESP32 will go to sleep (in seconds) 
@@ -118,13 +127,11 @@ RTC_DATA_ATTR int bootCount = 0;
 //#define CLK_PIN   4
 #define LED_TYPE    WS2812
 #define COLOR_ORDER GRB
-#define NUM_LEDS    16
+#define NUM_LEDS    24
 CRGB leds[NUM_LEDS];
 #define BRIGHTNESS          128
 #define FRAMES_PER_SECOND 120
-//end fastled
-//int volumeLED, playLED = 0;  //global variable for palystate and volume state
-const int LED_COUNT = 16;
+int pulseCounter = 0;
 
 /*
 Method to print the reason by which ESP32
@@ -146,6 +153,15 @@ void print_wakeup_reason(){
   }
 }
 
+void loopPlayer(uint8_t deltaT = 50)  //loop player while waiting
+{
+    unsigned long tTemp = millis();
+    while (millis() - tTemp < deltaT)  //loop for deltaT
+    {
+      player.loop();  //waiting 
+    }
+}
+
 void resetStandbyTimer()
 {
    standbyTimer = millis();
@@ -159,7 +175,7 @@ void led(int pin, bool on)
     ||(pin == LED_4)
     ||(pin == LED_5))
   {
-    digitalWrite(pin, !on);
+    digitalWrite(pin, on);
   }
 }
 
@@ -171,23 +187,22 @@ void flashLed(int pin, unsigned long time = BLINK_TIME)
     ||(pin == LED_4)
     ||(pin == LED_5))
   {
-    //led(pin,false);
-    led(pin,true);
-    delay(time);
-    //led(pin,true);
     led(pin,false);
+    loopPlayer(time);
+    led(pin,true);
   }
 }
 
-void flashRing(struct CRGB ringColor, unsigned long time = BLINK_TIME)
+void flashRing(struct CRGB ringColor, unsigned long time = BLINK_TIME,int ledOffset = 0)  //offset used to shift led pattern
 {
   FastLED.clear(true);
-  for (int i = 0; i < LED_COUNT; i=i+(round(LED_COUNT/4)))
+  for (int i = 0; i < NUM_LEDS; i=i+(round(NUM_LEDS/4)))
   {
-    leds[i] = ringColor;
+    if (i+ledOffset < NUM_LEDS) leds[i+ledOffset] = ringColor;
+    else leds[i+ledOffset-NUM_LEDS] = ringColor;
   }
   FastLED.show();
-  delay(time);
+  loopPlayer(time);
 }
 
 void getFileList(fs::FS &fs, StringArray* array, const char * dirname, uint8_t levels, bool onlyDirAndM3U =true)
@@ -516,11 +531,11 @@ void notFound()
 
 }
 /*
-void gradientRing(int R, int G, int B)
+void gradientRing(int activeLEDS, int R, int G, int B)
 {
   for (int i = 0; i != LED_COUNT; i++)
   {
-    if (i <= voler) leds[i].setRGB();
+    if (i <= activeLEDS) leds[i].setRGB();
     else leds[i] = CRBG:BLACK; //turn other LEDs off
   }
 
@@ -531,16 +546,13 @@ void setVolume(int newVolume)
   player.setVolume(newVolume);
   volume = newVolume;
   ESP_LOGV(TAG, "Changing volume to %d", volume);
-    float volers = (float) (( (float) volume / (float) MAX_VOLUME) * (float)LED_COUNT);
-    int volumeLEDS = (int) volers;
-    int volumeLEDS = round( (volume / MAX_VOLUME) * LED_COUNT); //test
-    for (int j = 0; j != LED_COUNT; j++)
+    int volumeLEDS = roundf( ((float)volume / (float)MAX_VOLUME) * (float)NUM_LEDS); //get active leds
+    for (int i = 0; i != NUM_LEDS; i++)
       {
-      if (j <= volumeLEDS) leds[j].setRGB(j*(128/NUM_LEDS), (LED_COUNT*(128/NUM_LEDS))-(j*(128/NUM_LEDS)), 0); //dim green
-      else leds[j]= CRGB::Black; //off*/
+      if (i <= volumeLEDS) leds[i].setRGB(i*(128/NUM_LEDS), (NUM_LEDS*(128/NUM_LEDS))-(i*(128/NUM_LEDS)), 0); //dim green
+      else leds[i]= CRGB::Black; //off*/
     }
     FastLED.show();
-    delay(10);
     displayTimer = millis();  //make sure it stays visible
 }
 
@@ -573,7 +585,7 @@ void serverStart()
 
     server.on("/", HTTP_GET, [](){
       sendMainPage();
-      resetStandbyTimer();
+      //resetStandbyTimer();
     });
 
    server.on("/vol-", HTTP_GET, [](){
@@ -646,9 +658,10 @@ void serverStart()
       Serial.println("previous track");
       if (player.isPlaying())
       {
-        Serial.println(player.findPreviousPlaylistEntry());
+        //Serial.println(player.findPreviousPlaylistEntry());
         //player.connecttoSD(lastTrack,false); // same track, start from the beginnig (of playlist)
-        player.connecttoSD(player.findPreviousPlaylistEntry(),false);
+        //player.connecttoSD(player.findPreviousPlaylistEntry(),false);
+        player.previousTrack();
       }
       sendMainPage();
     });    
@@ -860,7 +873,7 @@ void serverStart()
 
 void wifiStart()
   {
-    if (digitalRead(BUTTON_PLAY))  //enable WIFI if play button pressed during startup
+    if (digitalRead(BUTTON_PLAY))  //generate Wifi AP if play button pressed during startup
     {
       WiFiManager WifiManager;
       String hostName = String(F("ESPFTP")) + String((unsigned long)ESP.getEfuseMac()); 
@@ -876,7 +889,7 @@ void wifiStart()
       WiFi.setHostname(hostName.c_str());
       Serial.print("MyHostName:");
       Serial.println(WiFi.getHostname());
-      flashRing(CRGB::Blue,500); //signal active WIFI
+      flashRing(CRGB::Blue,500); //signal active Wifi AP
     }
     else
     {
@@ -899,6 +912,8 @@ void wifiStart()
   void standBy()
   {
           // Wake up button 3
+      FastLED.clear(true);
+      FastLED.show();
       esp_sleep_enable_ext0_wakeup(GPIO_NUM_33,1); //1 = High, 0 = Low
       Serial.println("Going to sleep now");
       Serial.flush(); 
@@ -915,10 +930,10 @@ void wifiStart()
 
     if (buttonVolMinus.pressedFor(100))
     { 
-      resetStandbyTimer();
-      Serial.println("vol- pressed");
+      //resetStandbyTimer();
       if (player.isPlaying())
       {
+        Serial.println("vol- pressed");
         changeVolume(-1);
         flashLed(LED_VOL_MINUS,100);
       }
@@ -926,115 +941,104 @@ void wifiStart()
 
     if (buttonVolPlus.pressedFor(100))
     {
-      resetStandbyTimer();
-      Serial.println("vol+ pressed");
+      //resetStandbyTimer();
       if (player.isPlaying())
       {
         if (volumeEnabled)
         {
+          Serial.println("vol+ pressed");
           changeVolume(+1);
+          flashLed(LED_VOL_PLUS,100);
         }
-        flashLed(LED_VOL_PLUS,100);
       }
     }
 
-    /*if (buttonStop.pressedFor(100))
-    {
-      Serial.println("stop pressed");
-      resetStandbyTimer();
-      flashLed(LED_STOP);
-      player.stop_mp3client();
-    }*/
-    if (buttonSkipPlus.pressedFor(100))
-    {
-      Serial.println("Skip plus short pressed.");
-      Serial.print(player.getFileSize());
-      Serial.print(" ");
-      Serial.println(player.getFilePos() + (24*4096));
-      if (player.isPlaying() && (player.getFileSize() - 4096) > (player.getFilePos() + (24*4096))) //palying and able to skip
-      {    
-        flashLed(LED_SKIP_PLUS);
-        uint8_t tempVolume = player.getVolume();
-        player.setVolume(0);  //mute volume
-          player.setFilePos(player.getFilePos() + (24*4096)); //seek
-          unsigned long tTemp = millis();
-          while (millis() - tTemp < 180)
-          {
-            player.loop();  //waiting 
+    if (buttonPlay.wasReleased()) {
+      //resetStandbyTimer();
+      if (ignoreButtonPlay == false) {
+          if (player.isPlaying()) {
+            player.isPaused = !player.isPaused;
+            Serial.println("...toogle pause");
           }
-          player.setVolume(tempVolume); //restore volume
+          else {
+            player.connecttoSD(lastTrack,true); // same track, resume
+            Serial.println("Resume...");
+          }
       }
+      ignoreButtonPlay = false;
+    } else if (buttonPlay.pressedFor(LONG_PRESS) &&
+               ignoreButtonPlay == false) {
+      if (player.isPlaying()) {
+        Serial.println("Play long pressed");
+        Serial.println("Stop playback");
+        player.stop_mp3client();
+      }
+      ignoreButtonPlay = true;
     }
 
-    if (buttonSkipPlus.pressedFor(3000))
-    {
-      resetStandbyTimer();
-      Serial.println("Next track pressed.");
-      if (player.isPlaying())
-      { 
+    if (buttonSkipPlus.wasReleased()) {
+      //resetStandbyTimer();
+      if (ignoreButtonSkipPlus == false) {
+          if (player.isPlaying()) {
+            Serial.println("short skip plus");
+            /*Serial.print(player.getFileSize());
+            Serial.print(" ");
+            Serial.println(player.getFilePos() + (24*4096));*/
+            if (player.isPlaying() && (player.getFileSize() - 4096) > (player.getFilePos() + (24*4096))) //palying and able to skip
+            {    
+              flashLed(LED_SKIP_PLUS);
+              uint8_t tempVolume = player.getVolume();
+              player.setVolume(0);  //mute volume
+                player.setFilePos(player.getFilePos() + (24*4096)); //seek
+                /*unsigned long tTemp = millis();
+                while (millis() - tTemp < 180)  //loop for 180ms
+                {
+                  player.loop();  //waiting 
+                }*/
+                loopPlayer(180);  //wait for player to catch up
+                player.setVolume(tempVolume); //restore volume
+            }
+          }
+      }
+      ignoreButtonSkipPlus = false;
+    } else if (buttonSkipPlus.pressedFor(LONG_PRESS) &&
+               ignoreButtonSkipPlus == false) {
+      if (player.isPlaying()) {
+        Serial.println("Skip plus long pressed");
         flashLed(LED_SKIP_PLUS);
         player.nextTrack();   //skip track
+        loopPlayer(); //wait for player to catch up
         player.isPaused = 0;
-        delay(300);
       }
+      ignoreButtonSkipPlus = true;
     }
 
-    if (buttonPlay.pressedFor(100))
-    {
-      resetStandbyTimer();
-      Serial.println("Play pressed.");
-      //flashLed(LED_PLAY);
-      if (!player.isPlaying())
-      {
-        if (player.isPaused) player.isPaused = 0;      //unpause
-        else player.connecttoSD(lastTrack,true); // same track, resume
+    if (buttonSkipMinus.wasReleased()) {
+      //resetStandbyTimer();
+      if (ignoreButtonSkipMinus == false) {
+          if (player.isPlaying()) {
+            if ((player.getFilePos() - (24*4096)) <= (24*4096)) 
+            {    
+              flashLed(LED_SKIP_MINUS);
+              uint8_t tempVolume = player.getVolume();
+              player.setVolume(0);  //mute volume
+                player.setFilePos(player.getFilePos() - (24*4096)); //seek
+                loopPlayer(180);
+                player.setVolume(tempVolume); //restore volume
+            }
+          }
       }
-      else  //play is playing
-      { 
-        Serial.println("...toogle pause");
-        delay(300);
-        player.isPaused = !player.isPaused; //toggle pause
-      }
-      delay(200);
-    }
-
-    if (buttonSkipMinus.pressedFor(100))
-    {
-      Serial.println("Skip minus short pressed.");
-      if (player.isPlaying() && (player.getFilePos() - (24*4096)) > (18*4096)) //palying and able to skip backwards (mind the header)
-      {    
-        Serial.println(player.getFilePos() - (24*4096));
-        Serial.println(player.getFilePos());
+      ignoreButtonSkipMinus = false;
+    } else if (buttonSkipMinus.pressedFor(LONG_PRESS) &&
+               ignoreButtonSkipMinus == false) {
+      if (player.isPlaying()) {
+        Serial.println("Skip minus long pressed");
         flashLed(LED_SKIP_MINUS);
-        uint8_t tempVolume = player.getVolume();
-        player.setVolume(0);  //mute volume
-        if (player.getFilePos() - (24*4096) > 0) player.setFilePos(player.getFilePos() - (24*4096)); //seek
-        unsigned long tTemp = millis();
-        while (millis() - tTemp < 180)  //loop for 180ms
-        {
-          player.loop();  //waiting 
-        }
-        player.setVolume(tempVolume); //restore volume
+        player.previousTrack();
+        player.isPaused = 0;
       }
-      else if ((player.getFilePos() - (24*4096)) < (18*4096))
-      {
-        player.connecttoSD(lastTrack,true);
-        Serial.println("Restart track");
-      }
-    }
-
-    if (buttonSkipMinus.pressedFor(2000))
-    {
-      resetStandbyTimer();
-      Serial.println("Previous track pressed.");
-      if (player.isPlaying())
-      {
-        flashLed(LED_SKIP_MINUS);
-        Serial.println(player.findPreviousPlaylistEntry());
-        //player.connecttoSD(lastTrack,false); // same track, start from the beginnig (of playlist)
-        player.connecttoSD(player.findPreviousPlaylistEntry(),false);
-      }
-    }
+      ignoreButtonSkipMinus = true;
+    }        
 
     /*if (buttonRestart.pressedFor(100))
     {
@@ -1131,11 +1135,11 @@ void setup(void){
 
   pinMode(LED_Ring,OUTPUT);
 
-  led(LED_1,true);
-  led(LED_2,true);
-  led(LED_3,true);
-  led(LED_4,true);
-  led(LED_5,true);
+  led(LED_1,false);
+  led(LED_2,false);
+  led(LED_3,false);
+  led(LED_4,false);
+  led(LED_5,false);
 
   FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
   // set master brightness control
@@ -1181,7 +1185,7 @@ void setup(void){
   Serial.print("MFRC522 Selftest:");
   if (mfrc522.PCD_PerformSelfTest())
   {
-    led(LED_3,true);
+    //led(LED_3,true);
     Serial.println("OK");
   }
   else
@@ -1255,17 +1259,24 @@ void loop(void)
   {
     if (player.isPaused)
     {
-      flashLed(LED_1,300);  //blink paused LED while player is paused
+      if (displayTimerLed == 0 || millis() - displayTimerLed > 1000)
+      {
+        led(LED_1,true);
+        displayTimerLed = millis();
+      }
+      else if (millis() - displayTimerLed > 500 && millis() - displayTimerLed < 1000)
+      {
+        led(LED_1,false);//flashLed(LED_1,300);  //blink paused LED while player is paused
+      }  
     }
     else
     {
-      standbyTimer = millis();
+      if (lastTrack != "") led(LED_1,true); //light up play led except during startup
+      resetStandbyTimer();//standbyTimer = millis();
       if (standbyTimer - displayTimer > 2000) //wait for other info to expire
       {
-        float led_switch = (float) (LED_COUNT * ((float)player.getFilePos()/(float)player.getFileSize()));
-        int progressLEDS = (int) led_switch;
-        int progressLEDS = roundf(LED_COUNT * (player.getFilePos()/player.getFileSize())); //test
-        for (int i = 0; i != LED_COUNT; i++)
+        int progressLEDS = roundf((float)NUM_LEDS * ((float)player.getFilePos()/(float)player.getFileSize())); //get active leds
+        for (int i = 0; i != NUM_LEDS; i++)
         {
           if (i <= progressLEDS) leds[i].setRGB(5+(i*(48/NUM_LEDS)), 0, 5+(i*(48/NUM_LEDS))); //dim purbple
           else leds [i] = CRGB::Black; //off        
@@ -1274,15 +1285,17 @@ void loop(void)
       }
     }
   }
-  else if(millis() - displayTimer > 2000)
+  else if(millis() - displayTimer > 1000)
   {
     displayTimer = millis();
-    FastLED.clear(true); //clear ring when stopped
+    /*FastLED.clear(true); //clear ring when stopped
     FastLED.show();
-    delay(1000);
-    flashRing(CRGB::White); //pulse ring white while waiting for Card
+    delay(1000);*/
+    if (pulseCounter<NUM_LEDS) pulseCounter++;
+    else pulseCounter = 0;
+    flashRing(CRGB::White,0,pulseCounter); //pulse ring white while waiting for Card
   }
-
+  else       led(LED_1,false); //play led off
   if (millis() > lastCardCheck + cardCheckIntervall)
   {
     lastCardCheck = millis();
@@ -1314,11 +1327,11 @@ void loop(void)
             {
               const String& track = card.track;
                 //enable Play controls
-                led(LED_5,false);
-                led(LED_4,false);
-                led(LED_3,false);
-                led(LED_2,false);
-                led(LED_1,false);
+                led(LED_5,true);
+                led(LED_4,true);
+                led(LED_3,true);
+                led(LED_2,true);
+                led(LED_1,true);
               Serial.print(" Start playing ");
               Serial.println(track.c_str());
               if (track.startsWith("http"))
@@ -1366,15 +1379,15 @@ void loop(void)
           else
           {
             flashRing(CRGB::Yellow);
-            displayTimer = millis()+250;
+            displayTimer = millis();
           }
         }
       }
     }
   }
 
-  if (!player.isPlaying() 
-  && millis() > lastStandbyCheck + standbyCheckIntervall)
+  if ((!player.isPlaying() 
+  && millis() > lastStandbyCheck + standbyCheckIntervall) || (player.isPaused && millis() > lastStandbyCheck + standbyCheckIntervall))
   {
     lastStandbyCheck=millis();
     if (millis() > standbyTimer+gotoStandbyAfter)

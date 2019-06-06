@@ -785,6 +785,16 @@ bool VS1053::setFilePos(uint32_t pos){
     write_register(SCI_WRAM, 0);
     return mp3file.seek(pos);
 }
+//---------------------------------------------------------------------------------------------------------------------
+void VS1053::previousTrack()
+{
+  if (m_f_localfile && mp3file)
+  {
+      if (m_playlist_num >= 1) m_playlist_num = m_playlist_num - 2; //adjust playlist position
+      else if (m_playlist_num < 1) m_playlist_num = m_playlist_num -1;
+    mp3file.seek(mp3file.size());
+  }
+}
 //modified end
 void VS1053::nextTrack()
 {
@@ -1455,67 +1465,6 @@ String VS1053::findNextPlaylistEntry( bool restart )
     return actualEntry;
 }
 
-
-String VS1053::findPreviousPlaylistEntry( bool restart )
-{
-    fs::FS  &fs=SD;
-    File     myPlaylistFile;
-    String   actualEntry = "";
-
-    ESP_LOGD(TAG, "Analysing playlist %s", m_playlist.c_str());
-
-    myPlaylistFile = fs.open(m_playlist);
-
-    if (myPlaylistFile)
-    {
-        uint32_t actualEntryNumber = 0;
-
-        ESP_LOGD(TAG, "looking for line %u", m_playlist_num);
-
-        //read lines untill the "counter" matches the line
-        while (actualEntryNumber <= (m_playlist_num-1))
-        {
-            //read the next line
-            actualEntry = myPlaylistFile.readStringUntil('\r');
-
-            //remove whitespaces
-            actualEntry.trim();
-
-            //
-            actualEntryNumber++;
-
-            //check if we have reached the end of the list without finding our number
-            if ((actualEntry.length() == 0) && (myPlaylistFile.available() == false))
-            {
-                /*
-                ESP_LOGV(TAG, "Line %u does not exist, using line 1", m_playlist_num);
-
-                //rewind the file
-                myPlaylistFile.seek(0);
-                actualEntryNumber   = 0;
-                m_playlist_num      = 0;
-                actualEntry         = "";
-                */
-                m_playlist_num      = 0;
-                if (restart == false)
-                {
-                    break;
-                }
-                ESP_LOGV(TAG, "End of playlist");
-            }
-            else
-            {
-                ESP_LOGV(TAG, "Read playlist entry %u: \"%s\"", actualEntryNumber, actualEntry.c_str());
-            }
-        };
-
-        myPlaylistFile.close();
-    }
-
-    return actualEntry;
-}
-
-//---------------------------------------------------------------------------------------
 bool VS1053::openMp3File(String sdfile, uint32_t position) 
 {
     bool result = true;
