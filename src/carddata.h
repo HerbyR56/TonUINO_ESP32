@@ -11,6 +11,7 @@ class Card
     };
     String ID;
     String track;
+    String AutoResume;
     bool isDeleted;
 };
 
@@ -23,7 +24,7 @@ class CardData
     }
 
     
-    int addCard(const char* ID, const char* track)
+    int addCard(const char* ID, const char* track, const char* AutoResume)
     {
       if (cardCount >= MAXCARDS)
       {
@@ -31,6 +32,7 @@ class CardData
       }
       card[cardCount].ID = ID;
       card[cardCount].track = track;
+      card[cardCount].AutoResume = AutoResume;
 
       Serial.print("Adding Card[");
       Serial.print(cardCount);
@@ -38,14 +40,16 @@ class CardData
       Serial.print(ID);
       Serial.print(":");
       Serial.println(track);
+      Serial.print(":");
+      Serial.println(AutoResume);
 
       cardCount++;
       return cardCount;
     }
 
-    int addCard(const String& ID, const String& track)
+    int addCard(const String& ID, const String& track, const String& AutoResume)
     {
-      return addCard(ID.c_str(), track.c_str());
+      return addCard(ID.c_str(), track.c_str(), AutoResume.c_str());
     }
 
     Card& getCard(int i)
